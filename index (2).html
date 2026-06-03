@@ -392,7 +392,9 @@ input[type=text]:focus{border-color:var(--azul-light);}
 
 <div class="user-bar">
   <label>👤</label>
+  <input type="text" id="userSearch" placeholder="Buscar usuario..." style="max-width:200px;" oninput="filterUsers(this.value)">
   <select id="userSelect" onchange="switchUser()"><option value="">-- Elegí tu nombre --</option></select>
+  <span id="userCount" style="color:var(--text-muted);font-size:11px;white-space:nowrap;">0 usuarios</span>
   <button class="btn" onclick="openModal()">+ Agregar</button>
 </div>
 
@@ -479,6 +481,12 @@ input[type=text]:focus{border-color:var(--azul-light);}
     <div class="info-box">Cargá los 2 equipos que clasificaron de cada grupo (en orden: 1ro y 2do).</div>
     <div class="group-picks-grid" id="admin-qualifiers-container"></div>
 
+    <div class="section-title" style="font-size:16px;margin-top:10px;">🔒 Control de Predicciones</div>
+    <div class="info-box">Bloqueá todas las predicciones de grupos cuando arranque el Mundial: partidos, clasificados 1ro/2do y campeón/subcampeón.</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+      <button class="btn" style="background:#c85f00;border:1px solid var(--oro);" onclick="toggleGroupsLock()" id="btn-lock-groups">🔒 Bloquear Predicciones de Grupos</button>
+      <div id="lock-status"></div>
+    </div>
     <div class="section-title" style="font-size:16px;margin-top:10px;">🔓 Control de Fases</div>
     <div class="info-box">Desbloqueá cada fase cuando quieras habilitar predicciones para esa ronda.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;" id="phaseUnlockBtns"></div>
@@ -663,7 +671,7 @@ async function loadData(){
     if(d.record){
       state = Object.assign({
         users:[], predictions:{}, results:{}, realChampion:'', realRunner:'',
-        unlockedPhases:['groups'], bracketMatches:{}
+        unlockedPhases:['groups'], bracketMatches:{}, groupsLocked:false
       }, d.record);
     }
   }catch(e){ showToast('❌ Error de conexión'); }
@@ -694,7 +702,7 @@ function isPhaseUnlocked(ph){ return state.unlockedPhases.includes(ph); }
 
 // ===================== INIT / RENDER ALL =====================
 function renderAll(){
-  renderUserSelect();
+  renderLockStatus(); applyGroupsLock(); renderUserSelect();
   fillTeamSelects();
   renderPhaseNav();
   renderPredictionsPhase(currentPredPhase);
@@ -723,13 +731,9 @@ function fillTeamSelects(){
 
 // ===================== USER SELECT =====================
 function renderUserSelect(){
-  const sel=document.getElementById('userSelect');
-  sel.innerHTML='<option value="">-- Elegí tu nombre --</option>';
-  state.users.forEach(u=>{
-    const o=document.createElement('option');o.value=u.id;o.textContent=u.name;
-    if(currentUser&&u.id===currentUser.id) o.selected=true;
-    sel.appendChild(o);
-  });
+  const search = document.getElementById('userSearch');
+  const q = search ? search.value.toLowerCase().trim() : '';
+  filterUsers(q);
 }
 
 // ===================== TABS =====================
@@ -857,7 +861,7 @@ function renderPredictionsPhase(phaseKey){
 function buildMatchRow(m, phaseKey){
   const r=state.results[m.id]||{};
   const hasResult=r.home!==undefined;
-  const dis=hasResult?'disabled':'';
+  const dis=(hasResult||(phaseKey==='groups'&&state.groupsLocked))?'disabled':'';
   const resultHtml=hasResult
     ?'<div class="result-chip">'+r.home+' - '+r.away+'</div>'
     :'';
@@ -905,7 +909,7 @@ async function addUser(){
   document.getElementById('predictions-content').style.display='block';
   document.getElementById('no-user-msg').style.display='none';
   document.getElementById('savebar').style.display='flex';
-  loadUserPredictions(currentPredPhase); updateHeaderPts(); renderGroupPicks();
+  loadUserPredictions(currentPredPhase); updateHeaderPts(); renderGroupPicks(); applyGroupsLock();
   showToast('🎉 ¡Bienvenido '+name+'!');
   btn.disabled=false; btn.textContent='Unirme 🎉';
 }
@@ -1508,7 +1512,7 @@ async function upmSubmit(){
       const noUser=document.getElementById('no-user-msg');
       content.style.display='block'; noUser.style.display='none';
       document.getElementById('savebar').style.display='flex';
-      loadUserPredictions(currentPredPhase); updateHeaderPts(); renderGroupPicks();
+      loadUserPredictions(currentPredPhase); updateHeaderPts(); renderGroupPicks(); applyGroupsLock();
     } else {
       document.getElementById('upm-error').textContent='PIN incorrecto, intentá de nuevo';
       upmBuffer='';
@@ -1530,7 +1534,7 @@ async function upmSubmit(){
       const noUser=document.getElementById('no-user-msg');
       content.style.display='block'; noUser.style.display='none';
       document.getElementById('savebar').style.display='flex';
-      loadUserPredictions(currentPredPhase); updateHeaderPts(); renderGroupPicks();
+      loadUserPredictions(currentPredPhase); updateHeaderPts(); renderGroupPicks(); applyGroupsLock();
       showToast('✅ PIN creado exitosamente');
     } else {
       document.getElementById('upm-error').textContent='Los PINs no coinciden, empezá de nuevo';
@@ -1723,6 +1727,57 @@ function closeProfileModal(){
 function closeProfile(e){
   if(e.target === document.getElementById('profileOverlay')) closeProfileModal();
 }
+
+// ===================== SEARCH / FILTER USERS =====================
+function filterUsers(query){
+  const sel = document.getElementById('userSelect');
+  const q = query.toLowerCase().trim();
+  sel.innerHTML = '<option value="">-- Elegí tu nombre --</option>';
+  const filtered = q ? state.users.filter(u=>u.name.toLowerCase().includes(q)) : state.users;
+  filtered.forEach(u=>{
+    const o = document.createElement('option');
+    o.value = u.id; o.textContent = u.name;
+    if(currentUser && u.id===currentUser.id) o.selected = true;
+    sel.appendChild(o);
+  });
+  document.getElementById('userCount').textContent = state.users.length + ' usuarios';
+}
+
+// ===================== LOCK GROUPS =====================
+function renderLockStatus(){
+  const btn = document.getElementById('btn-lock-groups');
+  const status = document.getElementById('lock-status');
+  if(!btn||!status) return;
+  if(state.groupsLocked){
+    btn.textContent = '🔓 Desbloquear Predicciones de Grupos';
+    btn.style.background = 'var(--azul-mid)';
+    status.innerHTML = '<span style="color:#4db8ff;font-size:13px;font-weight:600;">✅ Bloqueado: grupos, clasificados y campeón/subcampeón</span>';
+  } else {
+    btn.textContent = '🔒 Bloquear Predicciones de Grupos';
+    btn.style.background = '#c85f00';
+    status.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">Sin bloquear — los jugadores pueden editar</span>';
+  }
+}
+
+function applyGroupsLock(){
+  const locked = state.groupsLocked;
+  ['pick-champion','pick-runner'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.disabled=locked;
+  });
+  document.querySelectorAll('.group-pick-select').forEach(el=>{ el.disabled=locked; });
+}
+
+async function toggleGroupsLock(){
+  const action = state.groupsLocked ? 'desbloquear' : 'bloquear';
+  if(!confirm('¿Querés '+action+' las predicciones de grupos, clasificados y campeón/subcampeón?')) return;
+  state.groupsLocked = !state.groupsLocked;
+  await pushData();
+  renderLockStatus();
+  renderPredictionsPhase(currentPredPhase);
+  applyGroupsLock();
+  showToast(state.groupsLocked ? '🔒 Todo bloqueado' : '🔓 Predicciones desbloqueadas');
+}
+
 async function init(){
   await loadData();
   document.getElementById('loadingScreen').style.display='none';
